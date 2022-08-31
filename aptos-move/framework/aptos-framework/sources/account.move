@@ -30,6 +30,12 @@ module aptos_framework::account {
         signer_capability_offer: CapabilityOffer<SignerCapability>,
     }
 
+    // SignerCapability's
+    struct SignerAuthority has key {
+        offer: CapabilityOffer<SignerCapability>, // at most one address can be the delegator
+        auto_account: bool, // indicate if code deployed on this account can acquire the signer of this account
+    }
+
     struct KeyRotationEvent has drop, store {
         old_authentication_key: vector<u8>,
         new_authentication_key: vector<u8>,
@@ -41,6 +47,8 @@ module aptos_framework::account {
 
     struct CapabilityOffer<phantom T> has store { for: Option<address> }
     struct RotationCapability has drop, store { account: address }
+
+    // This is deprecated and should not be used for any new usecases
     struct SignerCapability has drop, store { account: address }
 
     struct OriginatingAddress has key {
@@ -310,6 +318,7 @@ module aptos_framework::account {
 
     /// A resource account is used to manage resources independent of an account managed by a user.
     public fun create_resource_account(source: &signer, seed: vector<u8>): (signer, SignerCapability) {
+        abort(1);
         let bytes = bcs::to_bytes(&signer::address_of(source));
         vector::append(&mut bytes, seed);
         let addr = from_bcs::to_address(hash::sha3_256(bytes));
@@ -317,6 +326,23 @@ module aptos_framework::account {
         let signer = create_account_unchecked(copy addr);
         let signer_cap = SignerCapability { account: addr };
         (signer, signer_cap)
+    }
+
+    public fun create_resource_account_v2(source: &signer, seed: vector<u8>, auto_account: bool): signer {
+        let bytes = bcs::to_bytes(&signer::address_of(source));
+        vector::append(&mut bytes, seed);
+        let addr = from_bcs::to_address(hash::sha3_256(bytes));
+
+        let signer = create_account_unchecked(copy addr);
+        move_to(
+            &signer,
+            SignerAuthority{
+                offer: CapabilityOffer<SignerCapability> {
+                    for: option::some(signer::address_of(source))
+                },
+            auto_account,
+        });
+        signer
     }
 
     /// create the account for system reserved addresses
@@ -375,9 +401,22 @@ module aptos_framework::account {
     /// Capability based functions for efficient use.
     ///////////////////////////////////////////////////////////////////////////
 
-    public fun create_signer_with_capability(capability: &SignerCapability): signer {
+    /// reserved for framework friend modules to prevent this being abused
+    public(friend) fun create_signer_with_capability(capability: &SignerCapability): signer {
         let addr = &capability.account;
         create_signer(*addr)
+    }
+
+    public entry fun acquire_signer(account: &signer, from_account: address): signer {
+
+    }
+
+    public entry fun delegate_signer(account_owner:&signer, to_account: address) {
+
+    }
+
+    public entry fun revoke_signer_delegation(account_owner: &signer) {
+
     }
 
     #[test(user = @0x1)]

@@ -32,6 +32,8 @@ module aptos_framework::aptos_governance {
     use aptos_framework::timestamp;
     use aptos_framework::voting;
 
+    friend aptos_framework::account;
+
     /// The specified stake pool does not have sufficient stake to create a proposal
     const EINSUFFICIENT_PROPOSER_STAKE: u64 = 1;
     /// This account is not the designated voter of the specified stake pool

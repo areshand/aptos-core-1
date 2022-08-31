@@ -3,7 +3,7 @@
 ///
 /// A dev wishing to use resource accounts for a liquidity pool, would likely do the following:
 /// 1. Create a new account using `Resourceaccount::create_resource_account`. This creates the
-/// account, stores the `signer_cap` within a `Resourceaccount::Container`, and rotates the key to
+/// account, move the creator's account address to the resource account delegator and rotates the key to
 /// the current accounts authentication key or a provided authentication key.
 /// 2. Define the LiquidityPool module's address to be the same as the resource account.
 /// 3. Construct a ModuleBundle payload for the resource account using the authentication key used
@@ -18,10 +18,9 @@
 /// ```
 /// fun init_module(source: &signer) {
 ///   let dev_address = @DEV_ADDR;
-///   let signer_cap = retrieve_resource_account_cap(&source, dev_address);
-///   let lp_signer = create_signer_with_capability(&signer_cap);
-///   let lp = LiquidityPoolInfo { signer_cap: signer_cap, ... };
-///   move_to(&lp_signer, lp);
+///   let signer = account::acquire_signer(source, dev_address);
+///   let lp = LiquidityPoolInfo {, ... };
+///   move_to(&signer, lp);
 /// }
 /// ```
 ///
@@ -30,7 +29,7 @@
 /// public fun add_coin<X, Y>(lp: &LP, x: Coin<x>, y: Coin<y>) {
 ///     if(!exists<LiquidityCoin<X, Y>(LP::Address(lp), LiquidityCoin<X, Y>)) {
 ///         let mint, burn = Coin::initialize<LiquidityCoin<X, Y>>(...);
-///         move_to(&create_signer_with_capability(&lp.cap), LiquidityCoin<X, Y>{ mint, burn });
+///         move_to(&code_signer(), LiquidityCoin<X, Y>{ mint, burn });
 ///     }
 ///     ...
 /// }
@@ -49,6 +48,10 @@ module aptos_framework::resource_account {
         store: SimpleMap<address, account::SignerCapability>,
     }
 
+    struct ResourceAccounts has key {
+        accounts: vector<address>,
+    }
+
     /// Creates a new resource account and rotates the authentication key to either
     /// the optional auth key if it is non-empty (though auth keys are 32-bytes)
     /// or the source accounts current auth key.
@@ -56,24 +59,34 @@ module aptos_framework::resource_account {
         origin: &signer,
         seed: vector<u8>,
         optional_auth_key: vector<u8>,
-    ) acquires Container {
-        let (resource, resource_signer_cap) = account::create_resource_account(origin, seed);
+    ) acquires Container, ResourceAccounts {
+        let resource_signer = account::create_resource_account_v2(origin, seed, false);
 
         let origin_addr = signer::address_of(origin);
         if (!exists<Container>(origin_addr)) {
             move_to(origin, Container { store: simple_map::create() })
         };
 
-        let container = borrow_global_mut<Container>(origin_addr);
-        let resource_addr = signer::address_of(&resource);
-        simple_map::add(&mut container.store, resource_addr, resource_signer_cap);
+        // add resource account address to the container
+        let addr = signer::address_of(&resource_signer);
+        if (exists<ResourceAccounts>(origin_addr)) {
+            let store = borrow_global_mut<ResourceAccounts>(origin_addr);
+            if (!vector::contains(&store.accounts, &addr)) {
+                vector::push_back(&mut store.accounts, addr)
+            }
+        }
+        else {
+            // skip
+        };
+        account::delegate_signer(&resource_signer, origin_addr);
+
 
         let auth_key = if (vector::is_empty(&optional_auth_key)) {
             account::get_authentication_key(origin_addr)
         } else {
             optional_auth_key
         };
-        account::rotate_authentication_key_internal(&resource, auth_key);
+        account::rotate_authentication_key_internal(&resource_signer, auth_key);
     }
 
     /// When called by the resource account, it will retrieve the capability associated with that
@@ -83,6 +96,7 @@ module aptos_framework::resource_account {
         resource: &signer,
         source_addr: address,
     ): account::SignerCapability acquires Container {
+        abort(1);
         assert!(exists<Container>(source_addr), error::not_found(ECONTAINER_NOT_PUBLISHED));
 
         let resource_addr = signer::address_of(resource);
@@ -102,6 +116,10 @@ module aptos_framework::resource_account {
         let resource = account::create_signer_with_capability(&resource_signer_cap);
         account::rotate_authentication_key_internal(&resource, zero_auth_key);
         resource_signer_cap
+    }
+
+    public fun retrieve_resource_account_signer(): signer {
+        resource:
     }
 
     #[test(user = @0x1111)]
