@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { AptosAccount, AptosAccountObject } from "./aptos_account";
+import * as TokenTypes from "./token_types";
+import {HexString} from "./hex_string";
+import {BCS} from "./transaction_builder";
+import {AccountAddress} from "./transaction_builder/aptos_types";
+import {Serializer} from "./transaction_builder/bcs";
+import {TokenId} from "./token_types";
 
 const aptosAccountObject: AptosAccountObject = {
   address: "0x978c213990c4833df71548df7ce49d54c759d6b6d932de22b24d56060b7af2aa",
@@ -63,5 +69,46 @@ test("Signs Strings", () => {
   expect(a1.signHexString("0x7777").hex()).toBe(
     // eslint-disable-next-line max-len
     "0xc5de9e40ac00b371cd83b1c197fa5b665b7449b33cd3cdd305bb78222e06a671a49625ab9aea8a039d4bb70e275768084d62b094bc1b31964f2357b7c1af7e0d",
+  );
+});
+
+test("Signs WithdrawProof", () => {
+  class WithdrawProof {
+    constructor(
+        public readonly token_owner: AccountAddress,
+        public readonly creator: AccountAddress,
+        public readonly collection: string,
+        public readonly name: string,
+        public readonly property_version: number,
+        public readonly amount: number,
+        public readonly withdrawer: AccountAddress,
+        public readonly expiration_sec: number,
+    ) {}
+
+    serialize(serializer: Serializer): void {
+      //this.token_owner.serialize(serializer);
+      //this.creator.serialize(serializer);
+      // serializer.serializeStr(this.collection);
+      // serializer.serializeStr(this.name);
+      // serializer.serializeU64(this.property_version);
+      serializer.serializeU64(this.amount);
+      //this.withdrawer.serialize(serializer);
+      //serializer.serializeU64(this.expiration_sec);
+    }
+  };
+
+  var proof = new WithdrawProof(
+    AccountAddress.fromHex("0x978c213990c4833df71548df7ce49d54c759d6b6d932de22b24d56060b7af2aa"),
+      AccountAddress.fromHex("0x978c213990c4833df71548df7ce49d54c759d6b6d932de22b24d56060b7af2aa"),
+      "Hello, World",
+      "Token",
+      0,
+      1,
+      AccountAddress.fromHex("0xaf"),
+      2000000,
+  );
+  const a1 = AptosAccount.fromAptosAccountObject(aptosAccountObject);
+  console.log(
+      a1.signHexString(HexString.fromUint8Array(BCS.bcsToBytes(proof))).hex()
   );
 });

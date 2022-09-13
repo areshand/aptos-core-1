@@ -5,11 +5,16 @@ module aptos_token::token {
     use std::string::String;
     use std::vector;
     use std::option::{Self, Option};
+    use std::bcs;
 
-    use aptos_framework::account;
     use aptos_framework::event::{Self, EventHandle};
+    use aptos_framework::account;
+    use aptos_framework::timestamp;
     use aptos_std::table::{Self, Table};
+    use aptos_std::ed25519;
+    use aptos_std::multi_ed25519;
     use aptos_token::property_map::{Self, PropertyMap};
+
 
     const TOKEN_MAX_MUTABLE_IND: u64 = 0;
     const TOKEN_URI_MUTABLE_IND: u64 = 1;
@@ -47,11 +52,15 @@ module aptos_token::token {
     const EWITHDRAW_ZERO: u64 = 22;
     const ENOT_TRACKING_SUPPLY: u64 = 23;
     const ENFT_NOT_SPLITABLE: u64 = 24;
+    const ENO_VALID_WITHDRAW_PROOF: u64 = 25;
+    const EPROOF_ADDRESS_NOT_MATCH: u64 = 26;
+    const EINVALID_ACCOUNT_SCHEMA: u64 = 27;
+    const EINVALID_WITHDRAWER: u64 = 28;
+    const EWITHDRAW_PROOF_EXPIRES: u64 = 29;
 
     //
     // Core data structures for holding tokens
     //
-
     struct Token has store {
         id: TokenId,
         // the amount of tokens. Only property_version = 0 can have a value bigger than 1.
@@ -525,6 +534,91 @@ module aptos_token::token {
         assert!(opt_in_transfer, error::permission_denied(EUSER_NOT_OPT_IN_DIRECT_TRANSFER));
         let token = withdraw_token(from, id, amount);
         direct_deposit(to, token);
+    }
+
+    /// a token owner can sign a withdraw challenge so that withdrawer can withdraw token from the token owner without token owner's sign
+    /// This struct should be non-copyable
+    struct WithdrawChallenge has drop, store {
+        token_owner: address, // ask user to provide address to avoid ambiguity from rotated keys
+        token_id: TokenId,
+        amount: u64,
+        withdrawer: address,
+        expiration_sec: u64,
+    }
+
+    struct WithdrawProof has drop, store {
+        token_owner: address,
+        withdraw_challenge_sig: vector<u8>
+    }
+
+    /// only token owner can create this one-time withdraw proof
+    public fun create_withdraw_proof(
+        owner: &signer,
+        withdraw_challenge_sig: vector<u8>,
+    ): WithdrawProof {
+        WithdrawProof {
+            token_owner: signer::address_of(owner),
+            withdraw_challenge_sig,
+        }
+    }
+
+    /// create a withdraw_challenge
+    public fun create_withdraw_challenge(
+        token_owner: address,
+        token_id: TokenId,
+        amount: u64,
+        withdrawer: address,
+        expiration_sec: u64,
+    ): WithdrawChallenge {
+        WithdrawChallenge {
+            token_owner,
+            token_id,
+            amount,
+            withdrawer,
+            expiration_sec,
+        }
+    }
+
+
+    /// Withdraw the token with a proof. This is essentially delegating authority to an ac
+    public fun withdraw_with_proof(
+        account: &signer, // an account that withdraw token
+        withdraw_proof: WithdrawProof,
+        owner_pub_key: vector<u8>, // the token owner's public key
+        account_scheme: u8,
+        withdraw_challenge: WithdrawChallenge
+    ): Token acquires TokenStore {
+        // verify the signer is teh withdraw
+        assert!(signer::address_of(account) == *&withdraw_challenge.withdrawer, error::invalid_argument(EINVALID_WITHDRAWER));
+        assert!(withdraw_proof.token_owner == withdraw_challenge.token_owner, error::invalid_argument(EINVALID_WITHDRAWER));
+        // verify the delegation hasn't expired yet
+        assert!(timestamp::now_seconds() <= *&withdraw_challenge.expiration_sec, error::invalid_argument(EWITHDRAW_PROOF_EXPIRES));
+        // verify the withdraw proof
+        let signed_withdraw_proof = withdraw_proof.withdraw_challenge_sig;
+        let token_addr = *&withdraw_challenge.token_owner;
+        let token_id = *&withdraw_challenge.token_id;
+        let token_amount = *&withdraw_challenge.amount;
+        if (account_scheme ==  account::get_single_sig_schema()) {
+            let pubkey = ed25519::new_unvalidated_public_key_from_bytes(owner_pub_key);
+            let expected_auth_key = ed25519::unvalidated_public_key_to_authentication_key(&pubkey);
+            assert!(account::get_authentication_key(token_addr) == expected_auth_key, error::invalid_argument(EPROOF_ADDRESS_NOT_MATCH));
+            let withdraw_sig = ed25519::new_signature_from_bytes(signed_withdraw_proof);
+            assert!(ed25519::signature_verify_strict(&withdraw_sig, &pubkey, bcs::to_bytes(&withdraw_challenge)), error::invalid_argument(ENO_VALID_WITHDRAW_PROOF));
+        } else if (account_scheme == account::get_multi_sig_schema()) {
+            let pubkey = multi_ed25519::new_unvalidated_public_key_from_bytes(owner_pub_key);
+            let expected_auth_key = multi_ed25519::unvalidated_public_key_to_authentication_key(&pubkey);
+            assert!(account::get_authentication_key(token_addr) == expected_auth_key, error::invalid_argument(EPROOF_ADDRESS_NOT_MATCH));
+
+            let withdraw_sig = multi_ed25519::new_signature_from_bytes(signed_withdraw_proof);
+            assert!(multi_ed25519::signature_verify_strict(&withdraw_sig, &pubkey, bcs::to_bytes(&withdraw_challenge)), error::invalid_argument(ENO_VALID_WITHDRAW_PROOF));
+        } else {
+            abort error::invalid_argument(EINVALID_ACCOUNT_SCHEMA)
+        };
+        withdraw_with_event_internal(
+            token_addr,
+            token_id,
+            token_amount,
+        )
     }
 
     public fun withdraw_token(
@@ -1208,13 +1302,13 @@ module aptos_token::token {
         let token_id = create_collection_and_token(creator, 2, 4, 4);
         assert!(token_id.property_version == 0, 1);
         let new_keys = vector<String>[
-            string::utf8(b"attack"), string::utf8(b"num_of_use")
+        string::utf8(b"attack"), string::utf8(b"num_of_use")
         ];
         let new_vals = vector<vector<u8>>[
-            bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1)
+        bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1)
         ];
         let new_types = vector<String>[
-            string::utf8(b"u64"), string::utf8(b"u64")
+        string::utf8(b"u64"), string::utf8(b"u64")
         ];
 
         mutate_token_properties(
@@ -1278,13 +1372,13 @@ module aptos_token::token {
         assert!(token_id.property_version == 0, 1);
         // only be able to mutate the attributed defined when creating the token
         let new_keys = vector<String>[
-            string::utf8(b"attack"), string::utf8(b"num_of_use"), string::utf8(b"wrong_attribute")
+        string::utf8(b"attack"), string::utf8(b"num_of_use"), string::utf8(b"wrong_attribute")
         ];
         let new_vals = vector<vector<u8>>[
-            bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1)
+        bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1)
         ];
         let new_types = vector<String>[
-            string::utf8(b"u64"), string::utf8(b"u64"), string::utf8(b"u64")
+        string::utf8(b"u64"), string::utf8(b"u64"), string::utf8(b"u64")
         ];
 
         mutate_token_properties(
@@ -1311,13 +1405,13 @@ module aptos_token::token {
         assert!(token_id.property_version == 0, 1);
         // only be able to mutate the attributed defined when creating the token
         let new_keys = vector<String>[
-            string::utf8(b"attack"), string::utf8(b"num_of_use")
+        string::utf8(b"attack"), string::utf8(b"num_of_use")
         ];
         let new_vals = vector<vector<u8>>[
-            bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1)
+        bcs::to_bytes<u64>(&1), bcs::to_bytes<u64>(&1)
         ];
         let new_types = vector<String>[
-            string::utf8(b"u64"), string::utf8(b"u64")
+        string::utf8(b"u64"), string::utf8(b"u64")
         ];
         let pm = get_property_map(signer::address_of(creator), token_id);
         assert!(property_map::length(&pm) == 2, 1);
@@ -1340,5 +1434,29 @@ module aptos_token::token {
         assert!(property_map::read_u64(&updated_pm, &string::utf8(b"attack")) == 2, 1);
         let og_pm = get_property_map(signer::address_of(creator), new_token_id);
         assert!(property_map::read_u64(&og_pm, &string::utf8(b"attack")) == 1, 1);
+    }
+
+    #[test(framework = @0x1, account=@0xaf, creator=@0x978c213990c4833df71548df7ce49d54c759d6b6d932de22b24d56060b7af2aa)]
+    fun test_withdraw_with_proof(creator: &signer, account: &signer, framework: &signer): Token acquires Collections, TokenStore {
+        let creator_pub_key = x"de19e5d1880cac87d57484ce9ed2e84cf0f9599f12e7cc3a52e4e7657a763f2c";
+        let creator_signed_proof = x"3d65c3d854735ee7b4d3a2955953f125bdcdf12d237719d90de73fc4dcfe7b515d1566ad72c6c77217b661d904040c2aa3961bdb59debbee8cd52d8078030608";
+        // create token
+        account::create_account_for_test(signer::address_of(creator));
+        let token_id = create_collection_and_token(creator, 2, 4, 4);
+
+        timestamp::set_time_has_started_for_testing(framework);
+        timestamp::update_global_time_for_test(1000000);
+
+        // provide the proof to the account
+        let challenge =  create_withdraw_challenge(
+            signer::address_of(creator), // ask user to provide address to avoid ambiguity from rotated keys
+            token_id,
+            1,
+            signer::address_of(account),
+            2000000,
+        );
+
+        let proof = create_withdraw_proof(creator, creator_signed_proof);
+        withdraw_with_proof(account, proof, creator_pub_key, account::get_single_sig_schema(), challenge)
     }
 }

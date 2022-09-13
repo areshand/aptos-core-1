@@ -434,6 +434,14 @@ module aptos_framework::account {
         capability.account
     }
 
+    public fun get_single_sig_schema(): u8 {
+        ED25519_SCHEME
+    }
+
+    public fun get_multi_sig_schema(): u8 {
+        MULTI_ED25519_SCHEME
+    }
+
     #[test(user = @0x1)]
     public entry fun test_create_resource_account(user: signer) {
         let (resource_account, resource_account_cap) = create_resource_account(&user, x"01");
