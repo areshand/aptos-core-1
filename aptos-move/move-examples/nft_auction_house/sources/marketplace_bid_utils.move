@@ -1,6 +1,6 @@
 /// bid library for listing token for sale and bid for tokens
 /// An example can be found under aptos-move/move_examples/nft_auction_house
-module auction_house::bid {
+module auction_house::marketplace_bid_utils {
 
     use aptos_framework::account;
     use aptos_framework::coin::{Self, Coin};
@@ -9,7 +9,7 @@ module auction_house::bid {
     use aptos_std::guid::{Self, ID};
     use aptos_std::table::{Self, Table};
     use aptos_token::token::{Self, TokenId};
-    use auction_house::listing::{Self, Listing};
+    use auction_house::marketplace_listing_utils::{Self, Listing, create_listing_id_raw};
     use std::signer;
     use std::error;
 
@@ -42,18 +42,27 @@ module auction_house::bid {
     /// Listing Id doesn't match
     const ELISTING_ID_NOT_MATCH: u64 = 8;
 
+    /// The bidder has already bid for the same listing
+    const EBID_ID_EXISTS: u64 = 9;
+
+
     /// hold the bid info and coin at user account
     struct Bid<phantom CoinType> has store {
-        bidder: address,
+        id: BidId,
         coin: Coin<CoinType>,
         offer_price: u64,
-        listing_id: ID, // ensure the bid is only executed for the chosen listing_id
         expiration_sec: u64,
+    }
+
+    /// This is the BidId used dedup the bid from the same signer for a listing
+    struct BidId has copy, drop, store {
+        bidder: address,
+        listing_id: ID,
     }
 
     /// store all the bids by the user
     struct BidRecords<phantom CoinType> has key {
-        records: Table<ID, Bid<CoinType>>,
+        records: Table<BidId, Bid<CoinType>>,
         bid_event: EventHandle<BidEvent<CoinType>>,
         withdraw_bid_event: EventHandle<WithdrawBidEvent<CoinType>>,
     }
@@ -61,12 +70,12 @@ module auction_house::bid {
     struct BidEvent<phantom CoinType> has copy, drop, store {
         offer_price: u64,
         listing_id: ID,
-        bid_id: ID,
+        bid_id: BidId,
         expiration_sec: u64,
     }
 
     struct WithdrawBidEvent<phantom CoinType> has copy, drop, store {
-        bid_id: ID,
+        bid_id: BidId,
     }
 
     public fun initialize_bid_records<CoinType>(bidder: &signer)  {
@@ -92,15 +101,15 @@ module auction_house::bid {
         bid_time: u64,
     ) {
         // validate token_id match
-        assert!(token_id == listing::get_listing_token_id(entry), error::invalid_argument(ETOKEN_ID_NOT_MATCH));
+        assert!(token_id == marketplace_listing_utils::get_listing_token_id(entry), error::invalid_argument(ETOKEN_ID_NOT_MATCH));
         // validate offerred amount and price
-        let listed_amount =  listing::get_listing_token_amount(entry);
-        let min_total = listing::get_listing_min_price(entry) * listed_amount;
+        let listed_amount =  marketplace_listing_utils::get_listing_token_amount(entry);
+        let min_total = marketplace_listing_utils::get_listing_min_price(entry) * listed_amount;
         let total_coin_amount = offer_price * token_amount;
-        assert!( total_coin_amount >= min_total, ENO_SUFFICIENT_FUND);
+        assert!(total_coin_amount >= min_total, ENO_SUFFICIENT_FUND);
         assert!(token_amount == listed_amount, ETOKEN_AMOUNT_NOT_MATCH);
-        assert!(bid_time >= listing::get_listing_start(entry), error::invalid_argument(ELISTING_NOT_STARTED));
-        assert!(bid_time <= listing::get_listing_expiration(entry), error::invalid_argument(ELISTING_EXPIRED));
+        assert!(bid_time >= marketplace_listing_utils::get_listing_start(entry), error::invalid_argument(ELISTING_NOT_STARTED));
+        assert!(bid_time <= marketplace_listing_utils::get_listing_expiration(entry), error::invalid_argument(ELISTING_EXPIRED));
     }
 
     /// withdraw the coin and store them in bid struct and return a global unique bid id
@@ -111,7 +120,7 @@ module auction_house::bid {
         offer_price: u64,
         entry: &Listing<CoinType>,
         expiration_sec: u64,
-    ): ID acquires BidRecords {
+    ): BidId acquires BidRecords {
         initialize_bid_records<CoinType>(bidder);
         let bidder_address = signer::address_of(bidder);
         // check the bid is legit for the listing
@@ -119,43 +128,48 @@ module auction_house::bid {
         assert_bid_for_a_listing(token_id, total_coin_amount, token_amount, entry, timestamp::now_seconds());
         // check bidder has sufficient balance
         assert!(coin::balance<CoinType>(bidder_address) >= total_coin_amount, error::invalid_argument(ENO_SUFFICIENT_FUND));
+
+        // assert the bid_id not exist in the bid records
+        initialize_bid_records<CoinType>(bidder);
+        let bid_records = borrow_global_mut<BidRecords<CoinType>>(bidder_address);
+        let bid_id = create_bid_id(bidder_address, marketplace_listing_utils::get_listing_id(entry));
+        assert!(table::contains(&bid_records.records,  bid_id), error::already_exists(EBID_ID_EXISTS));
+
         // withdraw the coin and store them in escrow to ensure the fund is avaliable until expiration_sec
         let coin = coin::withdraw<CoinType>(bidder, total_coin_amount);
 
         let bid = Bid<CoinType> {
-            bidder: bidder_address,
+            id: bid_id,
             coin,
             offer_price,
-            listing_id: listing::get_listing_id(entry),
             expiration_sec,
         };
-        let bid_id = create_bid_id(bidder);
-        initialize_bid_records<CoinType>(bidder);
-        let bid_records = borrow_global_mut<BidRecords<CoinType>>(bidder_address);
+
         table::add(&mut bid_records.records, bid_id, bid);
         event::emit_event<BidEvent<CoinType>>(
             &mut bid_records.bid_event,
             BidEvent<CoinType> {
                 offer_price,
-                listing_id: listing::get_listing_id(entry),
+                listing_id: marketplace_listing_utils::get_listing_id(entry),
                 bid_id,
                 expiration_sec,
             },
         );
-
         // opt-in direct transfer to receive token without signer
         token::opt_in_direct_transfer(bidder, true);
 
         bid_id
     }
 
-    /// bidder can withdraw fund from any bid
-    public entry fun release_coin_from_bid<CoinType>(
+    /// Bidder can destroy the bid after the bid expires to get the coin back and store them in the coinstore
+    public entry fun destory_bid<CoinType>(
         bidder: &signer,
-        bid_id_creation_number: u64,
+        lister_addr: address,
+        listing_creation_number: u64,
     ) acquires BidRecords {
         let bidder_address = signer::address_of(bidder);
-        let bid_id = guid::create_id(bidder_address, bid_id_creation_number);
+        let listing_id = create_listing_id_raw(lister_addr, listing_creation_number);
+        let bid_id = create_bid_id(bidder_address, listing_id);
 
         let bid_records = borrow_global_mut<BidRecords<CoinType>>(bidder_address);
         assert!(table::contains(&bid_records.records, bid_id), error::not_found(EBID_NOT_EXIST));
@@ -170,15 +184,6 @@ module auction_house::bid {
                 bid_id
             },
         );
-    }
-
-    /// validate if bid still exists
-    public fun is_bid_valid<CoinType>(bid_id: ID): bool acquires BidRecords {
-        let bidder_address = guid::id_creator_address(&bid_id);
-
-        let bid_records = borrow_global_mut<BidRecords<CoinType>>(bidder_address);
-        table::contains(&bid_records.records, bid_id)
-
     }
 
     fun deduct_fee<CoinType>(
@@ -218,7 +223,7 @@ module auction_house::bid {
             _,
             expiration_sec,
             withdraw_cap,
-        ) = listing::destroy_listing(entry);
+        ) = marketplace_listing_utils::destroy_listing(entry);
         let coin_owner = bid.bidder;
         // validate offerred amount and price
         let min_total = min_price * listed_amount;
@@ -283,9 +288,11 @@ module auction_house::bid {
     }
 
     /// internal function for assigned a global unique id for a listing
-    fun create_bid_id(owner: &signer): ID {
-        let gid = account::create_guid(owner);
-        guid::id(&gid)
+    public fun create_bid_id(bidder: address, listing_id: ID): BidId {
+        BidId {
+            bidder,
+            listing_id,
+        }
     }
 
     #[test_only]
@@ -306,7 +313,7 @@ module auction_house::bid {
 
         // owner creats a listing
         let token_id = token::create_collection_and_token(owner, 2, 2, 2);
-        let entry = listing::create_list<coin::FakeMoney>(
+        let entry = marketplace_listing_utils::create_list<coin::FakeMoney>(
             owner,
             token_id,
             1,
@@ -349,7 +356,7 @@ module auction_house::bid {
             false,
             false,
         );
-        let lister = listing::get_listing_owner(&entry);
+        let lister = marketplace_listing_utils::get_listing_owner(&entry);
         timestamp::update_global_time_for_test(100000000);
         execute_listing_bid(bid_id, entry,@aptos_framework, 10, 100);
 

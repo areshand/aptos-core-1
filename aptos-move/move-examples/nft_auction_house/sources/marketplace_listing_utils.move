@@ -1,4 +1,4 @@
-module auction_house::listing {
+module auction_house::marketplace_listing_utils {
     use std::error;
     use std::signer;
     use std::string::String;
@@ -42,7 +42,7 @@ module auction_house::listing {
     }
 
     /// return a listing struct, marketplace owner can use this function to create a listing and store it in its inventory
-    public fun create_list<CoinType>(
+    public fun create_listing<CoinType>(
         owner: &signer,
         token_id: TokenId,
         amount: u64,
@@ -223,10 +223,15 @@ module auction_house::listing {
         (id, owner, token_id, amount, min_price, instant_sale, start_sec, expiration_sec, withdraw_cap)
     }
 
-    /// internal function for assigned a global unique id for a listing
+    /// internal function for creating a new unique id for a listing
     fun create_listing_id(owner: &signer): ID {
         let gid = account::create_guid(owner);
         guid::id(&gid)
+    }
+
+    /// util function for constructing the listing id from raw fields
+    public fun create_listing_id_raw(lister: address, listing_creation_number: u64): ID {
+        guid::create_id(lister, listing_creation_number)
     }
 
     public fun get_listing_id<CoinType>(list: &Listing<CoinType>): ID {
