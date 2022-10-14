@@ -6,6 +6,8 @@ import { AptosClient } from "./aptos_client";
 import { TokenClient } from "./token_client";
 
 import { getFaucetClient, NODE_URL } from "./utils/test_helper.test";
+import { bcsSerializeBool } from "./bcs";
+import { bytesToHex } from "@noble/hashes/utils";
 
 test(
   "full tutorial nft token flow",
@@ -31,7 +33,7 @@ test(
     );
 
     await client.waitForTransaction(
-      await tokenClient.createToken(
+      await tokenClient.createTokenWithMutabilityConfig(
         alice,
         collectionName,
         tokenName,
@@ -42,9 +44,10 @@ test(
         alice.address(),
         0,
         0,
-        ["key"],
-        ["2"],
-        ["int"],
+        ["TOKEN_BURNABLE_BY_OWNER"],
+        [bcsSerializeBool(true)],
+        ["bool"],
+        [false, false, false, false, true],
       ),
       { checkSuccess: true },
     );
@@ -93,6 +96,37 @@ test(
 
     const bobBalance = await tokenClient.getTokenForAccount(bob.address().hex(), tokenId);
     expect(bobBalance.amount).toBe("1");
+
+    // default token property is configured to be mutable and then alice can make bob burn token after token creation
+    // test mutate Bob's token properties and allow owner to burn this token
+    await tokenClient.mutateTokenProperties(
+      alice,
+      bob.address(),
+      alice.address(),
+      collectionName,
+      tokenName,
+      0,
+      1,
+      ["test"],
+      [bcsSerializeBool(true)],
+      ["bool"],
+    );
+
+    const newTokenId = {
+      token_data_id: {
+        creator: alice.address().hex(),
+        collection: collectionName,
+        name: tokenName,
+      },
+      property_version: "1",
+    };
+    const mutated_token = await tokenClient.getTokenForAccount(bob.address().hex(), newTokenId);
+    expect(mutated_token.token_properties.map.data.length).toBe(2);
+
+    // burn the token by owner
+    let b = await tokenClient.burnByOwner(bob, alice.address(), collectionName, tokenName, 1, 1);
+    const newbalance = await tokenClient.getTokenForAccount(bob.address().hex(), newTokenId);
+    expect(newbalance.amount).toBe("0");
   },
   60 * 1000,
 );
