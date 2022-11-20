@@ -1,6 +1,6 @@
 import { Bytes, Deserializer, Serializer } from "../bcs";
 import { TypeTagParser } from "../transaction_builder";
-import { serializeArg } from "../transaction_builder/builder_utils";
+import { serializeArg, stringStructTag } from "../transaction_builder/builder_utils";
 import {
   TypeTag,
   TypeTagAddress,

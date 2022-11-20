@@ -24,6 +24,13 @@ import {
 } from "../aptos_types";
 import { Serializer } from "../bcs";
 
+export const stringStructTag = new StructTag(
+  AccountAddress.fromHex("0x1"),
+  new Identifier("string"),
+  new Identifier("String"),
+  [],
+);
+
 function assertType(val: any, types: string[] | string, message?: string) {
   if (!types?.includes(typeof val)) {
     throw new Error(
@@ -177,6 +184,9 @@ export class TypeTagParser {
       const res = this.parseTypeTag();
       this.consume(">");
       return new TypeTagVector(res);
+    }
+    if (tokenVal === "string" || tokenVal === "String") {
+      return new TypeTagStruct(stringStructTag);
     }
     if (tokenTy === "IDENT" && (tokenVal.startsWith("0x") || tokenVal.startsWith("0X"))) {
       const address = tokenVal;
