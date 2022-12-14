@@ -1487,7 +1487,7 @@ module aptos_token::token {
     }
 
     /// return the mutation setting of the token
-    public fun get_token_mutability_config(token_data_id: TokenDataId): TokenMutabilityConfig acquires Collections {
+    public fun get_tokendata_mutability_config(token_data_id: TokenDataId): TokenMutabilityConfig acquires Collections {
         let creator_addr = token_data_id.creator;
         assert!(exists<Collections>(creator_addr), error::not_found(ECOLLECTIONS_NOT_PUBLISHED));
         let all_token_data = &borrow_global<Collections>(creator_addr).token_data;

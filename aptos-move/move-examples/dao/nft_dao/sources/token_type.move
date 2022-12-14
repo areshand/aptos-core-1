@@ -28,9 +28,9 @@ module std::token_type {
     public fun get_token_type(token_id: TokenId): u64 {
         let token_data_id = token::get_tokendata_id(token_id);
         let (_, _, _, property_version) = token::get_token_id_fields(&token_id);
-        let mutability_config = token::get_token_mutability_config(token_data_id);
+        let mutability_config = token::get_tokendata_mutability_config(token_data_id);
         let maximum = token::get_tokendata_maximum(token_data_id);
-        if (maximum == 1 && !token::get_token_mutability_maximum(mutability_config)){
+        if (maximum == 1 && !token::get_token_mutability_maximum(&mutability_config)){
             NFT
         } else if (property_version > 0) {
             NFT_PRINT
