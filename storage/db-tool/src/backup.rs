@@ -133,6 +133,35 @@ pub struct VerifyOpt {
     concurrent_downloads: ConcurrentDownloadsOpt,
 }
 
+#[derive(Parser)]
+pub struct CompactOpt {
+    #[clap(
+        about = "Specify how many epoch files to be merged in one compacted epoch ending metadata file"),
+        default_value = "1",
+    ]
+    pub epoch_ending_file_compact_cnt: u64,
+    #[clap(
+        about = "Specify how many state snapshot files to be merged in one compacted state snapshot metadata file"),
+        default_value = "1",
+    ]
+    pub state_snapshot_file_compact_cnt: u64,
+    #[clap(
+        about = "Specify how many transaction files to be merged in one transaction metadata file"),
+        default_value = "1",
+    ]
+    pub transaction_file_compact_cnt: u64,
+    #[clap(flatten)]
+    pub metadata_cache_opt: MetadataCacheOpt,
+    #[clap(flatten)]
+    pub storage: DBToolStorageOpt,
+}
+
+pub struct CompactionCoordinator {
+
+}
+
+
+
 impl Command {
     pub async fn run(self) -> Result<()> {
         Logger::new().level(Level::Info).init();

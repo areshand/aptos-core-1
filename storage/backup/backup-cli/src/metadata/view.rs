@@ -127,6 +127,19 @@ impl MetadataView {
 
         Ok(res)
     }
+
+    /// Compact the epoch ending metdata files and merge compaction_cnt files into 1 metadata file
+    pub fn compact_epoch_ending_backups(&self, compaction_cnt: u64) -> Result<Vec<Vec<EpochEndingBackupMeta>>> {
+        Ok(Vec::new())
+    }
+
+    pub fn compact_transaction_backups(&self, compaction_cnt: u64) -> Result<Vec<Vec<TransactionBackupMeta>>> {
+        Ok(Vec::new())
+    }
+
+    pub fn compact_state_backups(&self, compaction_cnt: u64) -> Result<Vec<Vec<StateSnapshotBackupMeta>>> {
+        Ok(Vec::new())
+    }
 }
 
 impl From<Vec<Metadata>> for MetadataView {
