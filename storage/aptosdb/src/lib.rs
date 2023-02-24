@@ -41,7 +41,6 @@ use crate::state_store::buffered_state::BufferedState;
 
 #[cfg(feature = "db-debugger")]
 pub mod db_debugger;
-pub mod compaction;
 
 use crate::{
     backup::{backup_handler::BackupHandler, restore_handler::RestoreHandler, restore_utils},

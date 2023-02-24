@@ -9,7 +9,7 @@ use aptos_backup_cli::{
         transaction::backup::{TransactionBackupController, TransactionBackupOpt},
     },
     coordinators::{
-        backup::{BackupCoordinator, BackupCoordinatorOpt},
+        backup::{BackupCompactor, BackupCoordinator, BackupCoordinatorOpt},
         verify::VerifyCoordinator,
     },
     metadata::{cache, cache::MetadataCacheOpt},
@@ -41,6 +41,8 @@ pub enum Command {
     Query(OneShotQueryType),
     #[clap(about = "verify the backup through restoring with the backup files")]
     Verify(VerifyOpt),
+    #[clap(subcommand, about = "Compact the metadata files")]
+    Compact(CompactOpt),
 }
 
 #[derive(Parser)]
@@ -133,34 +135,39 @@ pub struct VerifyOpt {
     concurrent_downloads: ConcurrentDownloadsOpt,
 }
 
+/// Support compacting and cleaning obsolete metadata files
 #[derive(Parser)]
-pub struct CompactOpt {
-    #[clap(
-        about = "Specify how many epoch files to be merged in one compacted epoch ending metadata file"),
-        default_value = "1",
-    ]
-    pub epoch_ending_file_compact_cnt: u64,
-    #[clap(
-        about = "Specify how many state snapshot files to be merged in one compacted state snapshot metadata file"),
-        default_value = "1",
-    ]
-    pub state_snapshot_file_compact_cnt: u64,
-    #[clap(
-        about = "Specify how many transaction files to be merged in one transaction metadata file"),
-        default_value = "1",
-    ]
-    pub transaction_file_compact_cnt: u64,
+pub enum CompactOpt {
+    #[clap(about = "Compact metdata files")]
+    Compact(CompactionOpt),
+    #[clap(about = "Cleanup the backup metadata files")]
+    Cleanup(CleanupOpt),
+}
+
+#[derive(Parser)]
+pub struct CompactionOpt {
+    /// Specify how many epoch files to be merged in one compacted epoch ending metadata file
+    #[clap(long, default_value = "1")]
+    pub epoch_ending_file_compact_cnt: usize,
+    /// Specify how many state snapshot files to be merged in one compacted state snapshot metadata file
+    #[clap(long, default_value = "1")]
+    pub state_snapshot_file_compact_cnt: usize,
+    /// Specify how many transaction files to be merged in one transaction metadata file
+    #[clap(long, default_value = "1")]
+    pub transaction_file_compact_cnt: usize,
     #[clap(flatten)]
     pub metadata_cache_opt: MetadataCacheOpt,
     #[clap(flatten)]
     pub storage: DBToolStorageOpt,
+    #[clap(flatten)]
+    concurrent_downloads: ConcurrentDownloadsOpt,
 }
 
-pub struct CompactionCoordinator {
-
+#[derive(Parser)]
+pub struct CleanupOpt {
+    #[clap(flatten)]
+    pub storage: DBToolStorageOpt,
 }
-
-
 
 impl Command {
     pub async fn run(self) -> Result<()> {
@@ -242,6 +249,24 @@ impl Command {
                 )?
                 .run()
                 .await?
+            },
+            Command::Compact(compact_opt) => {
+                match compact_opt {
+                    CompactOpt::Compact(opt) => {
+                        let compactor = BackupCompactor::new(
+                            opt.epoch_ending_file_compact_cnt,
+                            opt.state_snapshot_file_compact_cnt,
+                            opt.transaction_file_compact_cnt,
+                            opt.metadata_cache_opt,
+                            opt.storage.init_storage().await?,
+                            opt.concurrent_downloads.get(),
+                        );
+                        compactor.run().await?
+                    },
+                    CompactOpt::Cleanup(_) => {
+                        // TODO: add cleanup logic for removing obsolete metadata files
+                    },
+                }
             },
         }
         Ok(())

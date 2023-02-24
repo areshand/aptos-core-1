@@ -9,7 +9,7 @@ use crate::{
         transaction::backup::{TransactionBackupController, TransactionBackupOpt},
     },
     metadata,
-    metadata::cache::MetadataCacheOpt,
+    metadata::{cache::MetadataCacheOpt, Metadata},
     metrics::backup::{
         EPOCH_ENDING_EPOCH, HEARTBEAT_TS, STATE_SNAPSHOT_EPOCH, TRANSACTION_VERSION,
     },
@@ -31,7 +31,6 @@ use tokio::{
     time::{interval, Duration},
 };
 use tokio_stream::wrappers::IntervalStream;
-use crate::storage::DBToolStorageOpt;
 
 #[derive(Parser)]
 pub struct BackupCoordinatorOpt {
@@ -332,28 +331,24 @@ impl BackupCoordinator {
 pub struct BackupCompactor {
     storage: Arc<dyn BackupStorage>,
     metadata_cache_opt: MetadataCacheOpt,
-    target_version: Version,
-    epoch_ending_file_compact_cnt: u64,
-    state_snapshot_file_compact_cnt: u64,
-    transaction_file_compact_cnt: u64,
+    epoch_ending_file_compact_cnt: usize,
+    state_snapshot_file_compact_cnt: usize,
+    transaction_file_compact_cnt: usize,
     concurrent_downloads: usize,
 }
 
 impl BackupCompactor {
     pub fn new(
-        target_version: Version,
-        epoch_ending_file_compact_cnt: u64,
-        state_snapshot_file_compact_cnt: u64,
-        transaction_file_compact_cnt: u64,
+        epoch_ending_file_compact_cnt: usize,
+        state_snapshot_file_compact_cnt: usize,
+        transaction_file_compact_cnt: usize,
         metadata_cache_opt: MetadataCacheOpt,
         storage: Arc<dyn BackupStorage>,
         concurrent_downloads: usize,
-
     ) -> Self {
         BackupCompactor {
             storage,
             metadata_cache_opt,
-            target_version,
             epoch_ending_file_compact_cnt,
             state_snapshot_file_compact_cnt,
             transaction_file_compact_cnt,
@@ -362,28 +357,45 @@ impl BackupCompactor {
     }
 
     pub async fn run(&self) -> Result<()> {
+        info!("Backup compaction started");
         // Connect to both the local node and the backup storage.
-        let metaview = metadata::cache::sync_and_load(
+        let mut metaview = metadata::cache::sync_and_load(
             &self.metadata_cache_opt,
             Arc::clone(&self.storage),
             self.concurrent_downloads,
-        ).await?;
+        )
+        .await?;
 
         // Get a snapshot of remote metadata files before compaction
-        let files = self.storage.list_metadata_files()?;
+        let files = self.storage.list_metadata_files().await?;
 
         // Get all compacted chunks to be written back to storage
-        let epoch_ending_backups = metaview.compact_epoch_ending_backups(self.epoch_ending_file_compact_cnt)?;
-        let transaction_backups = metaview.compact_transaction_backups(self.transaction_file_compact_cnt)?;
-        let state_backups = metaview.compact_state_backups(self.state_snapshot_file_compact_cnt)?;
+        for range in metaview.compact_epoch_ending_backups(self.epoch_ending_file_compact_cnt)? {
+            let epoch_range = Metadata::new_epoch_ending_backup_range(range.to_vec())?;
+            self.storage
+                .save_metadata_line(&epoch_range.name(), &epoch_range.to_text_line()?)
+                .await?;
+        }
+        for range in metaview.compact_transaction_backups(self.transaction_file_compact_cnt)? {
+            let txn_range = Metadata::new_transaction_backup_range(range.to_vec())?;
+            self.storage
+                .save_metadata_line(&txn_range.name(), &txn_range.to_text_line()?)
+                .await?;
+        }
+        for range in metaview.compact_state_backups(self.state_snapshot_file_compact_cnt)? {
+            let state_range = Metadata::new_statesnapshot_backup_range(range.to_vec())?;
+            self.storage
+                .save_metadata_line(&state_range.name(), &state_range.to_text_line()?)
+                .await?;
+        }
 
-        // Write the chunks as new metadata files
-        self.storage.save_metadata_line();
-
-        // Mark all previous metadata files as backup file once the metadata files are merged correctly
-
+        // Move the compacted metadata files to the metadata backup folder
+        for file in files {
+            // directly return if any of the backup task fails
+            self.storage.backup_metadata_file(&file).await?
+        }
+        Ok(())
     }
-
 }
 
 trait Worker<'a, S, Fut: Future<Output = Result<S>> + 'a>:

@@ -364,6 +364,34 @@ pub(crate) fn db_backup(
         backup_path.path(),
         trusted_waypoints,
     );
+
+    // start the backup compaction
+    let compaction = Command::new(bin_path.as_path())
+        .current_dir(workspace_root())
+        .args([
+            "backup",
+            "compact",
+            "compact",
+            "--epoch-ending-file-compact-cnt",
+            "2",
+            "--state-snapshot-file-compact-cnt",
+            "2",
+            "--transaction-file-compact-cnt",
+            "2",
+            "--metadata-cache-dir",
+            metadata_cache_path1.path().to_str().unwrap(),
+            "--concurrent-downloads",
+            "4",
+            "--local-fs-dir",
+            backup_path.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compaction.status.success(),
+        "{}",
+        std::str::from_utf8(&compaction.stderr).unwrap()
+    );
     backup_coordinator.kill().unwrap();
     wait_res.unwrap();
     replay_verify(backup_path.path(), trusted_waypoints);

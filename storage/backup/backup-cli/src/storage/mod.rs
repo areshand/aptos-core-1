@@ -168,6 +168,8 @@ pub trait BackupStorage: Send + Sync {
     ///   2. But the cache does expect the content stays the same for a file handle, so when
     /// reorganising metadata files, give them new unique names.
     async fn list_metadata_files(&self) -> Result<Vec<FileHandle>>;
+    /// Move a metadata file to the metafile backup folder.
+    async fn backup_metadata_file(&self, file_handle: &FileHandleRef) -> Result<()>;
 }
 
 #[derive(Parser)]

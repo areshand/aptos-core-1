@@ -10,16 +10,17 @@ use crate::{
     storage::{BackupStorage, ShellSafeName, TextLine},
     utils::{error_notes::ErrorNotes, path_exists, PathToString},
 };
-use anyhow::Result;
+use anyhow::{format_err, Result};
 use async_trait::async_trait;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     str::FromStr,
 };
 use tokio::{
-    fs::{create_dir_all, read_dir, OpenOptions},
+    fs::{create_dir_all, read_dir, rename, OpenOptions},
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
 };
 
@@ -50,6 +51,7 @@ pub struct LocalFs {
 }
 
 impl LocalFs {
+    const METADATA_BACKUP_DIR: &'static str = "metadata_backup";
     const METADATA_DIR: &'static str = "metadata";
 
     pub fn new(dir: PathBuf) -> Self {
@@ -62,6 +64,10 @@ impl LocalFs {
 
     pub fn metadata_dir(&self) -> PathBuf {
         self.dir.join(Self::METADATA_DIR)
+    }
+
+    pub fn metadata_backup_dir(&self) -> PathBuf {
+        self.dir.join(Self::METADATA_BACKUP_DIR)
     }
 }
 
@@ -136,5 +142,27 @@ impl BackupStorage for LocalFs {
             }
         }
         Ok(res)
+    }
+
+    async fn backup_metadata_file(&self, file_handle: &FileHandleRef) -> Result<()> {
+        let dir = self.metadata_backup_dir();
+
+        // Check if the backup directory exists, create it if it doesn't
+        if !dir.exists() {
+            create_dir_all(&dir).await?;
+        }
+
+        // Get the file name and the backup file path
+        let name = Path::new(file_handle)
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or_else(|| format_err!("cannot extract filename from {}", file_handle))?;
+        let mut backup_path = PathBuf::from(&dir);
+        backup_path.push(name);
+
+        // Move the file to the backup directory
+        rename(&self.dir.join(file_handle), &backup_path).await?;
+
+        Ok(())
     }
 }
